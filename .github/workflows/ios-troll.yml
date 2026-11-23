@@ -1,0 +1,80 @@
+# .github/workflows/ios-troll.yml
+# 在 fork 的 wquguru/cicada 上构建 TrollStore 版（iOS 16.4，覆盖安装 com.wquguru.cicada）
+# 只需要另一个文件：ios/troll/port.py（CI 里临时改代码，不会提交回仓库）
+
+name: iOS TrollStore
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['ios/troll/**', '.github/workflows/ios-troll.yml']
+
+permissions:
+  contents: write
+
+env:
+  BUNDLE_ID: com.wquguru.cicada   # 和你手机上现在装的一致，TrollStore 才会覆盖并保留数据
+  MIN_OS: '16.4'
+
+jobs:
+  build:
+    runs-on: macos-26              # 上游 release.yml 也用这个（iOS 26 SDK，部署目标照样能设 16.4）
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tools
+        run: |
+          brew install ldid
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Port to iOS 16.4
+        run: python3 ios/troll/port.py
+
+      - name: Build .tipa
+        env:
+          TROLL: '1'
+          RELEASE: '1'
+          LIVE: '0'                  # 灵动岛扩展先不带（控制中心按钮要 iOS 18）
+          MIN_OS_OVERRIDE: ${{ env.MIN_OS }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          mkdir -p ios/build
+          ios/scripts/build.sh 2>&1 | tee ios/build/build.log
+
+      - name: Verify
+        run: |
+          BIN=ios/build/troll/Cicada.app/Cicada
+          xcrun vtool -show-build "$BIN" | tee /dev/stderr | grep -q "minos ${MIN_OS}"
+          ldid -e "$BIN" | grep -q "${BUNDLE_ID}"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' ios/build/troll/Cicada.app/Info.plist | grep -qx "${BUNDLE_ID}"
+          # iOS 16 没有的框架必须弱链接，否则一打开就闪退
+          STRONG=$(otool -l "$BIN" | awk '/cmd LC_LOAD_DYLIB$/{getline;getline; print $2}' \
+                   | grep -E 'Translation\.framework|FoundationModels' || true)
+          if [ -n "$STRONG" ]; then echo "::error::强链接了 iOS 16 没有的框架：$STRONG"; exit 1; fi
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cicada-troll-${{ github.run_number }}
+          path: |
+            ios/build/troll/*.tipa
+            ios/build/troll/*.sha256
+            ios/build/build.log
+          retention-days: 14
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: troll-${{ github.run_number }}
+          name: TrollStore build ${{ github.run_number }}（iOS 16.4）
+          files: ios/build/troll/*.tipa
+          body: |
+            基于 wquguru/cicada（Apache-2.0）修改的 TrollStore 版，最低 iOS 16.4。
+            手机上点 .tipa 下载，用 TrollStore 打开安装（覆盖 com.wquguru.cicada，数据保留）。
