@@ -115,6 +115,33 @@ def main():
                       if ("Text(" in l and " + " in l) else l for l in s.split("\n"))
         if s != orig: write(p, s); done.append(f"{p}: Compat16 替换")
 
+    # ---------- 5b. PiP 字幕：sampleBufferRenderer 是 iOS 17+ ----------
+    # 2026-11-23 首轮构建唯一报错：PiPSubtitles.swift:71 'sampleBufferRenderer' is only
+    # available in iOS 17.0 or newer。iOS 16 上直接往 AVSampleBufferDisplayLayer 入队
+    #（enqueue/flush/status 自 iOS 9 就有），17+ 仍走 renderer。
+    sub("ios/Sources/Cicada/PiPSubtitles.swift",
+        '    private func draw(_ c: Caption) {\n'
+        '        shown = c\n'
+        '        guard let buffer = Self.frame(c) else { return }\n'
+        '        let renderer = layer.sampleBufferRenderer\n'
+        '        if renderer.status == .failed { renderer.flush() }\n'
+        '        renderer.enqueue(buffer)\n'
+        '    }\n',
+        '    private func draw(_ c: Caption) {\n'
+        '        shown = c\n'
+        '        guard let buffer = Self.frame(c) else { return }\n'
+        '        if #available(iOS 17, *) {\n'
+        '            // sampleBufferRenderer 是 iOS 17+ 的 API\n'
+        '            let renderer = layer.sampleBufferRenderer\n'
+        '            if renderer.status == .failed { renderer.flush() }\n'
+        '            renderer.enqueue(buffer)\n'
+        '        } else {\n'
+        '            // iOS 16：直接往显示层入队（AVSampleBufferDisplayLayer 自 iOS 9 就有 enqueue/flush/status）\n'
+        '            if layer.status == .failed { layer.flush() }\n'
+        '            layer.enqueue(buffer)\n'
+        '        }\n'
+        '    }\n')
+
     # ---------- 6. 导入后台：上游实现只给 iOS 26 ----------
     sub("ios/Sources/Cicada/Importing.swift", "@MainActor\nenum ImportBackground {",
         "@available(iOS 26, *)\n@MainActor\nenum ImportBackground26 {")
